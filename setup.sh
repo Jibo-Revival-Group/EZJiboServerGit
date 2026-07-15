@@ -358,38 +358,51 @@ install_dotnet() {
 install_powershell() {
   step "Ensuring PowerShell (pwsh) is available"
 
+  # pwsh may already be installed as a .NET global tool.
+  [[ -d "$HOME/.dotnet/tools" ]] && export PATH="$HOME/.dotnet/tools:$PATH"
+
   if have pwsh; then
     ok "found pwsh $(pwsh --version 2>/dev/null || echo '?')"
     return 0
   fi
 
   if [[ "$SKIP_DEPS" -eq 1 ]]; then
-    die "pwsh not found and --skip-deps was set."
+    warn "pwsh not found and --skip-deps set; continuing without it"
+    return 0
   fi
 
+  # 1) Distro package where it is reliable.
   case "$PKG" in
     pacman)
-      # PowerShell lives in the AUR; use an AUR helper if present.
-      if have yay; then
-        yay -S --needed --noconfirm powershell-bin && have pwsh && { ok "installed pwsh via yay"; return 0; }
-      elif have paru; then
-        paru -S --needed --noconfirm powershell-bin && have pwsh && { ok "installed pwsh via paru"; return 0; }
-      fi
+      if have yay; then yay -S --needed --noconfirm powershell-bin >/dev/null 2>&1 || true
+      elif have paru; then paru -S --needed --noconfirm powershell-bin >/dev/null 2>&1 || true; fi
       ;;
-    apt)
-      # Prefer the Microsoft package feed; fall back to the tarball below.
-      if install_powershell_ms_apt && have pwsh; then ok "installed pwsh via apt"; return 0; fi
-      ;;
-    dnf)
-      if install_powershell_ms_dnf && have pwsh; then ok "installed pwsh via dnf"; return 0; fi
-      ;;
-    brew)
-      brew install --cask powershell || brew install powershell || true
-      have pwsh && { ok "installed pwsh via brew"; return 0; }
-      ;;
+    apt)  install_powershell_ms_apt || true ;;
+    dnf)  install_powershell_ms_dnf || true ;;
+    brew) brew install --cask powershell >/dev/null 2>&1 || brew install powershell >/dev/null 2>&1 || true ;;
   esac
+  if have pwsh; then ok "installed pwsh via $PKG"; return 0; fi
 
-  install_powershell_tarball
+  # 2) .NET global tool. Works on any distro since the SDK is already installed,
+  #    and needs no Microsoft apt/yum repo (great for brand-new distro releases).
+  if resolve_dotnet; then
+    info "Installing PowerShell as a .NET global tool"
+    if "$DOTNET_BIN" tool install --global PowerShell >/dev/null 2>&1 \
+       || "$DOTNET_BIN" tool update --global PowerShell >/dev/null 2>&1; then
+      export PATH="$HOME/.dotnet/tools:$PATH"
+      if have pwsh; then ok "installed pwsh $(pwsh --version 2>/dev/null || echo '') via dotnet tool"; return 0; fi
+    fi
+  fi
+
+  # 3) Official tarball (last resort).
+  if install_powershell_tarball && have pwsh; then
+    return 0
+  fi
+
+  # PowerShell is optional: run.sh runs the server without it (it is only needed
+  # for the repo's auxiliary .ps1 helper scripts).
+  warn "could not install PowerShell; continuing (the server still runs without it)"
+  return 0
 }
 
 install_powershell_ms_apt() {
@@ -416,20 +429,21 @@ install_powershell_ms_dnf() {
   have pwsh
 }
 
+# Non-fatal: returns non-zero on failure so callers can fall through.
 install_powershell_tarball() {
+  have curl || return 1
   info "Installing PowerShell from the official GitHub release tarball into ~/.powershell"
-  have curl || die "need curl to download PowerShell tarball"
 
   local arch tag asset
   case "$(uname -m)" in
     x86_64|amd64) arch="x64" ;;
     aarch64|arm64) arch="arm64" ;;
-    *) die "unsupported CPU architecture for PowerShell tarball: $(uname -m)" ;;
+    *) warn "unsupported CPU architecture for PowerShell tarball: $(uname -m)"; return 1 ;;
   esac
 
-  tag="$(curl -fsSL https://api.github.com/repos/PowerShell/PowerShell/releases/latest \
+  tag="$(curl -fsSL https://api.github.com/repos/PowerShell/PowerShell/releases/latest 2>/dev/null \
         | grep -m1 '"tag_name"' | sed -E 's/.*"v?([^"]+)".*/\1/')"
-  [[ -n "$tag" ]] || die "could not determine latest PowerShell release"
+  [[ -n "$tag" ]] || { warn "could not determine latest PowerShell release"; return 1; }
 
   if [[ "$OS" == "Darwin" ]]; then
     asset="powershell-${tag}-osx-${arch}.tar.gz"
@@ -439,15 +453,19 @@ install_powershell_tarball() {
 
   local url="https://github.com/PowerShell/PowerShell/releases/download/v${tag}/${asset}"
   local dest="$HOME/.powershell"
-  local tarball="$EZJIBOSERVER_HOME/.cache/${asset}"
-  mkdir -p "$dest" "$(dirname "$tarball")"
+  mkdir -p "$dest"
 
-  curl -fsSL "$url" -o "$tarball" || die "failed to download $url"
-  tar -xzf "$tarball" -C "$dest"
+  # Stream straight into tar to avoid a large intermediate file (some minimal
+  # containers fail writing big temp files: "curl: (23) Failure writing output").
+  if ! curl -fSL --retry 3 --retry-delay 2 "$url" 2>/dev/null | tar -xz -C "$dest"; then
+    warn "failed to download/extract $url"
+    return 1
+  fi
+  [[ -x "$dest/pwsh" ]] || { warn "PowerShell extracted but $dest/pwsh is missing"; return 1; }
   chmod +x "$dest/pwsh"
   export PATH="$dest:$PATH"
-  have pwsh || die "PowerShell tarball extracted but 'pwsh' is not on PATH ($dest)."
   ok "installed pwsh $(pwsh --version 2>/dev/null || echo "$tag") into $dest"
+  return 0
 }
 
 build_whisper() {
@@ -472,9 +490,18 @@ build_whisper() {
   if [[ -x "$cli" ]]; then
     ok "whisper-cli already built ($cli)"
   else
+    # Cap parallel compile jobs by available RAM (~1.5 GB per C++ job) so the
+    # build does not get OOM-killed in small containers/LXCs.
+    local cores mem_mb jobs
+    cores="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)"
+    mem_mb="$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 2048)"
+    jobs=$(( mem_mb / 1500 ))
+    [[ "$jobs" -lt 1 ]] && jobs=1
+    [[ "$jobs" -gt "$cores" ]] && jobs="$cores"
+    info "Compiling with $jobs job(s) (cores: $cores, RAM: ${mem_mb} MB)"
     ( cd "$WHISPER_DIR" \
       && cmake -B build -DCMAKE_BUILD_TYPE=Release >/dev/null \
-      && cmake --build build --config Release -j "$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)" >/dev/null )
+      && cmake --build build --config Release -j "$jobs" >/dev/null )
     [[ -x "$cli" ]] || die "whisper.cpp build finished but $cli is missing"
     ok "built whisper-cli"
   fi
@@ -652,8 +679,10 @@ EZJIBOSERVER_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OPENJIBO_DIR="$EZJIBOSERVER_HOME/JiboExperiments/OpenJibo"
 
 # Make locally installed toolchains discoverable (setup.sh may have placed
-# .NET in ~/.dotnet and PowerShell in ~/.powershell).
+# .NET in ~/.dotnet, dotnet global tools in ~/.dotnet/tools, and PowerShell in
+# ~/.powershell or as a dotnet tool).
 [[ -d "$HOME/.dotnet" ]] && export PATH="$HOME/.dotnet:$PATH"
+[[ -d "$HOME/.dotnet/tools" ]] && export PATH="$HOME/.dotnet/tools:$PATH"
 [[ -d "$HOME/.powershell" ]] && export PATH="$HOME/.powershell:$PATH"
 export DOTNET_ROOT="${DOTNET_ROOT:-$HOME/.dotnet}"
 
@@ -698,12 +727,28 @@ esac
 cd "$OPENJIBO_DIR"
 
 if [[ "$MODE" == "local" ]]; then
-  command -v pwsh >/dev/null 2>&1 || {
-    echo "error: pwsh (PowerShell) not found on PATH. Re-run setup.sh." >&2
+  command -v dotnet >/dev/null 2>&1 || {
+    echo "error: dotnet not found on PATH. Re-run setup.sh." >&2
     exit 1
   }
   echo "Starting OpenJibo (local dev): https://localhost:24604  http://localhost:24605"
-  exec pwsh -NoProfile -File "scripts/cloud/Start-OpenJiboDotNet.ps1"
+
+  # Prefer the repo's PowerShell launcher when pwsh is available (keeps parity
+  # with the upstream tooling). Otherwise run dotnet directly with the same
+  # capture directories the .ps1 sets up -- PowerShell is not required.
+  if command -v pwsh >/dev/null 2>&1; then
+    exec pwsh -NoProfile -File "scripts/cloud/Start-OpenJiboDotNet.ps1"
+  fi
+
+  echo "(pwsh not found -- running dotnet directly)"
+  CAP_WS="$OPENJIBO_DIR/captures/websocket"
+  CAP_HTTP="$OPENJIBO_DIR/captures/http"
+  mkdir -p "$CAP_WS" "$CAP_HTTP"
+  export OpenJibo__Telemetry__DirectoryPath="$CAP_WS"
+  export OpenJibo__ProtocolTelemetry__DirectoryPath="$CAP_HTTP"
+  exec dotnet run \
+    --project "src/Jibo.Cloud/dotnet/src/Jibo.Cloud.Api/Jibo.Cloud.Api.csproj" \
+    --launch-profile Jibo.Cloud.Api
 fi
 
 # live mode
@@ -760,6 +805,7 @@ REPO_DIR="$EZJIBOSERVER_HOME/JiboExperiments"
 OPENJIBO_DIR="$REPO_DIR/OpenJibo"
 
 [[ -d "$HOME/.dotnet" ]] && export PATH="$HOME/.dotnet:$PATH"
+[[ -d "$HOME/.dotnet/tools" ]] && export PATH="$HOME/.dotnet/tools:$PATH"
 export DOTNET_ROOT="${DOTNET_ROOT:-$HOME/.dotnet}"
 
 # Distro-packaged .NET 10 SDKs (e.g. Arch) can miss AspNetCore prune data,
