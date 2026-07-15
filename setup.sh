@@ -678,13 +678,22 @@ set -euo pipefail
 EZJIBOSERVER_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OPENJIBO_DIR="$EZJIBOSERVER_HOME/JiboExperiments/OpenJibo"
 
-# Make locally installed toolchains discoverable (setup.sh may have placed
-# .NET in ~/.dotnet, dotnet global tools in ~/.dotnet/tools, and PowerShell in
-# ~/.powershell or as a dotnet tool).
-[[ -d "$HOME/.dotnet" ]] && export PATH="$HOME/.dotnet:$PATH"
+# Make locally installed toolchains discoverable.
 [[ -d "$HOME/.dotnet/tools" ]] && export PATH="$HOME/.dotnet/tools:$PATH"
 [[ -d "$HOME/.powershell" ]] && export PATH="$HOME/.powershell:$PATH"
-export DOTNET_ROOT="${DOTNET_ROOT:-$HOME/.dotnet}"
+
+# Point DOTNET_ROOT at a REAL .NET install. Standalone apphosts (e.g. the pwsh
+# dotnet-tool) locate the runtime via DOTNET_ROOT, so a wrong value (~/.dotnet
+# with only a tools/ dir and no runtime) breaks them. Prefer a local SDK under
+# ~/.dotnet, otherwise resolve the system dotnet's real install directory.
+if [[ -x "$HOME/.dotnet/dotnet" ]]; then
+  export PATH="$HOME/.dotnet:$PATH"
+  export DOTNET_ROOT="$HOME/.dotnet"
+elif command -v dotnet >/dev/null 2>&1; then
+  _dn="$(readlink -f "$(command -v dotnet)" 2>/dev/null || command -v dotnet)"
+  _dn_dir="$(dirname "$_dn")"
+  [[ -d "$_dn_dir/shared" ]] && export DOTNET_ROOT="$_dn_dir"
+fi
 
 # Distro-packaged .NET 10 SDKs (e.g. Arch) can miss AspNetCore prune data,
 # causing NETSDK1226 on restore. MSBuild reads this env var as a property.
@@ -771,9 +780,10 @@ echo "  cert: $CERT_PEM"
 echo "  key:  $KEY_PEM"
 
 # Binding 443 needs privilege. Preserve our PATH/env for the child process.
-RUN=(env "PATH=$PATH" "DOTNET_ROOT=$DOTNET_ROOT" \
+RUN=(env "PATH=$PATH" \
      "AllowMissingPrunePackageData=true" \
      "CERT_PEM=$CERT_PEM" "KEY_PEM=$KEY_PEM")
+[[ -n "${DOTNET_ROOT:-}" ]] && RUN+=("DOTNET_ROOT=$DOTNET_ROOT")
 [[ -n "${CHAIN_PEM:-}" ]] && RUN+=("CHAIN_PEM=$CHAIN_PEM")
 [[ -n "${ASPNETCORE_URLS:-}" ]] && RUN+=("ASPNETCORE_URLS=$ASPNETCORE_URLS")
 
@@ -804,9 +814,17 @@ EZJIBOSERVER_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$EZJIBOSERVER_HOME/JiboExperiments"
 OPENJIBO_DIR="$REPO_DIR/OpenJibo"
 
-[[ -d "$HOME/.dotnet" ]] && export PATH="$HOME/.dotnet:$PATH"
 [[ -d "$HOME/.dotnet/tools" ]] && export PATH="$HOME/.dotnet/tools:$PATH"
-export DOTNET_ROOT="${DOTNET_ROOT:-$HOME/.dotnet}"
+
+# Point DOTNET_ROOT at a real .NET install (see run.sh for details).
+if [[ -x "$HOME/.dotnet/dotnet" ]]; then
+  export PATH="$HOME/.dotnet:$PATH"
+  export DOTNET_ROOT="$HOME/.dotnet"
+elif command -v dotnet >/dev/null 2>&1; then
+  _dn="$(readlink -f "$(command -v dotnet)" 2>/dev/null || command -v dotnet)"
+  _dn_dir="$(dirname "$_dn")"
+  [[ -d "$_dn_dir/shared" ]] && export DOTNET_ROOT="$_dn_dir"
+fi
 
 # Distro-packaged .NET 10 SDKs (e.g. Arch) can miss AspNetCore prune data,
 # causing NETSDK1226 on restore. MSBuild reads this env var as a property.
