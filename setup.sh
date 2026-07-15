@@ -534,29 +534,60 @@ clone_repo() {
   [[ -d "$OPENJIBO_DIR" ]] || die "expected OpenJibo directory not found at $OPENJIBO_DIR"
 }
 
+# Ensure the OPENJIBO_STT_* keys carry the given values, replacing any existing
+# ones and leaving every other line (encryption secrets, search config, ...)
+# exactly as-is. Safe to run repeatedly.
+write_stt_paths() {
+  local file="$1" ffmpeg="$2" cli="$3" model="$4"
+  local tmp; tmp="$(mktemp)"
+
+  # Drop any prior STT keys + our generated STT comment, then trim trailing
+  # blank lines so repeated runs never accumulate whitespace.
+  { grep -vE '^(OPENJIBO_STT_(FFMPEG_PATH|WHISPER_CLI_PATH|WHISPER_MODEL_PATH)=|# Local speech-to-text)' "$file" || true; } \
+    | awk '{ lines[n++]=$0 } END { last=n; while (last>0 && lines[last-1]=="") last--; for (i=0;i<last;i++) print lines[i] }' \
+    > "$tmp"
+
+  {
+    echo ""
+    echo "# Local speech-to-text (whisper.cpp) paths. Auto-configured by $BRAND setup.sh."
+    echo "OPENJIBO_STT_FFMPEG_PATH=\"${ffmpeg}\""
+    echo "OPENJIBO_STT_WHISPER_CLI_PATH=\"${cli}\""
+    echo "OPENJIBO_STT_WHISPER_MODEL_PATH=\"${model}\""
+  } >> "$tmp"
+
+  cat "$tmp" > "$file"
+  rm -f "$tmp"
+}
+
 setup_env() {
   step "Configuring environment (.env)"
 
   local env_file="$OPENJIBO_DIR/.env"
   local example="$OPENJIBO_DIR/.env.example"
 
+  local ffmpeg_path whisper_cli whisper_model
+  ffmpeg_path="$(command -v ffmpeg || echo /usr/bin/ffmpeg)"
+  whisper_cli="$WHISPER_DIR/build/bin/whisper-cli"
+  whisper_model="$WHISPER_DIR/models/ggml-${WHISPER_MODEL}.bin"
+
+  # Existing .env: keep secrets/other settings, just (re)write the STT paths.
   if [[ -f "$env_file" ]]; then
-    warn "existing .env found; leaving it untouched (it may hold encryption keys)"
+    info "Existing .env found; refreshing speech-to-text paths (secrets untouched)"
+    write_stt_paths "$env_file" "$ffmpeg_path" "$whisper_cli" "$whisper_model"
+    chmod 600 "$env_file" 2>/dev/null || true
+    ok "ensured STT paths in $env_file"
     return 0
   fi
 
   info "Creating $env_file"
   [[ -f "$example" ]] || die "missing $example to base the .env on"
 
-  local encrypt salt ffmpeg_path whisper_cli whisper_model
+  local encrypt salt
   encrypt="$(openssl rand -base64 48 | tr -d '\n')"
   salt="$(openssl rand -hex 16)"
-  ffmpeg_path="$(command -v ffmpeg || echo /usr/bin/ffmpeg)"
-  whisper_cli="$WHISPER_DIR/build/bin/whisper-cli"
-  whisper_model="$WHISPER_DIR/models/ggml-${WHISPER_MODEL}.bin"
 
-  # Start from the example, then strip the placeholder secret lines so we can
-  # append freshly generated values.
+  # Start from the example, then strip the placeholder secret/STT lines so we
+  # can append freshly generated values.
   grep -vE '^(OPENJIBO_USER_ENCRYPT|OPENJIBO_USER_SALT|OPENJIBO_STT_)' "$example" > "$env_file"
 
   {
@@ -565,12 +596,9 @@ setup_env() {
     echo "# Encryption material for user data. DO NOT CHANGE after first run."
     echo "OPENJIBO_USER_ENCRYPT=\"${encrypt}\""
     echo "OPENJIBO_USER_SALT=\"${salt}\""
-    echo ""
-    echo "# Local speech-to-text (whisper.cpp) paths."
-    echo "OPENJIBO_STT_FFMPEG_PATH=\"${ffmpeg_path}\""
-    echo "OPENJIBO_STT_WHISPER_CLI_PATH=\"${whisper_cli}\""
-    echo "OPENJIBO_STT_WHISPER_MODEL_PATH=\"${whisper_model}\""
   } >> "$env_file"
+
+  write_stt_paths "$env_file" "$ffmpeg_path" "$whisper_cli" "$whisper_model"
 
   chmod 600 "$env_file" 2>/dev/null || true
   ok "wrote $env_file with generated secrets and STT paths"
