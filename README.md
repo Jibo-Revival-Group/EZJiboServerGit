@@ -3,6 +3,10 @@
 A simple, one-command way to install and run
 [JiboExperiments/OpenJibo](https://github.com/Jibo-Revival-Group/JiboExperiments).
 
+Tested to work on:
+- Arch Linux
+- Ubuntu (24)
+
 `setup.sh` is a self-contained installer designed to be run straight from the
 internet. It installs the toolchain, clones the repo into `~/EZJiboServer`,
 writes a ready-to-use `.env`, generates self-signed TLS certificates for
