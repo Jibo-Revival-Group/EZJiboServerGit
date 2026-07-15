@@ -16,7 +16,7 @@ live/device mode, warms up the build, and leaves behind two scripts:
 
 ## Install
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Jibo-Revival-Group/EZJiboServerGit/main/setup.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Jibo-Revival-Group/EZJiboServerGit/refs/heads/master/setup.sh | bash
 ```
 
 If you have the file locally instead, just run `./setup.sh`.
