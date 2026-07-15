@@ -28,10 +28,11 @@ If you have the file locally instead, just run `./setup.sh`.
 ## Run
 ```bash
 cd ~/EZJiboServer
-./run.sh
+./run.sh          # live/device mode on port 443 (default, uses sudo)
+./run.sh local    # local dev cloud instead
 ```
 
-Then open the health check at <http://localhost:24605/health>.
+For local testing, open the health check at <http://localhost:24605/health>.
 
 ## What setup.sh installs
 
@@ -73,23 +74,28 @@ It then:
 ## Running the server
 
 ```bash
-./run.sh            # local dev cloud (default)
-./run.sh local      # same as above
-./run.sh live       # live-device mode on port 443 (real Jibo)
+./run.sh            # live-device mode on port 443 (real Jibo) [default]
+./run.sh live       # same as above
+./run.sh local      # local dev cloud (https://localhost:24604 / http://localhost:24605)
 ```
 
-- **local** starts on `https://localhost:24604` and `http://localhost:24605`
-  (health at `/health`). No certificates or root needed. This is the best mode
-  for testing.
-- **live** binds port `443` with TLS so a physical Jibo can connect. It uses the
-  self-signed certificates in `~/EZJiboServer/certs/` by default, converts them
-  to a PFX for Kestrel via the repo's
+- **live** (default) binds port `443` with TLS so a physical Jibo can connect. It
+  uses the self-signed certificates in `~/EZJiboServer/certs/` by default,
+  converts them to a PFX for Kestrel via the repo's
   `scripts/cloud/start-dotnet-with-node-cert.sh`, and runs with `sudo` for the
   privileged port. To use your own certificate material instead:
 
   ```bash
   CERT_PEM=/path/to/cert.pem KEY_PEM=/path/to/key.pem ./run.sh live
   ```
+
+- **local** starts on `https://localhost:24604` and `http://localhost:24605`
+  (health at `/health`). No certificates or root needed. This is the best mode
+  for testing.
+
+Both modes use fully local, file-backed persistence (under `OpenJibo/App_Data`)
+so no external services are required. `run.sh` also does a `git pull` to update
+OpenJibo before starting; skip it with `./run.sh --no-update` (or `NO_UPDATE=1`).
 
   Use the same certificate material your Jibo routing already trusts. See the
   repo's `docs/device-bootstrap.md` for the device side.

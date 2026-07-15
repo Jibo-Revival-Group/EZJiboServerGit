@@ -123,8 +123,8 @@ summary() {
   printf "   ${C_GREY}${T_END}${C_RESET} ${C_BOLD}%-18s${C_RESET}${C_GREY}%s${C_RESET}\n" "JiboExperiments/" "cloned OpenJibo source"
   printf "\n  ${C_BOLD}Next steps${C_RESET}\n"
   printf "    ${C_BLUE}${G_ARROW}${C_RESET} cd %s\n" "$EZJIBOSERVER_HOME"
-  printf "    ${C_BLUE}${G_ARROW}${C_RESET} ${C_BOLD}./run.sh${C_RESET}        ${C_GREY}# https://localhost:24604  http://localhost:24605${C_RESET}\n"
-  printf "    ${C_BLUE}${G_ARROW}${C_RESET} ${C_BOLD}./run.sh live${C_RESET}   ${C_GREY}# port 443 + TLS (real Jibo, uses sudo)${C_RESET}\n"
+  printf "    ${C_BLUE}${G_ARROW}${C_RESET} ${C_BOLD}./run.sh${C_RESET}        ${C_GREY}# port 443 + TLS (real Jibo, uses sudo)${C_RESET}\n"
+  printf "    ${C_BLUE}${G_ARROW}${C_RESET} ${C_BOLD}./run.sh local${C_RESET}  ${C_GREY}# https://localhost:24604  http://localhost:24605${C_RESET}\n"
   printf "    ${C_BLUE}${G_ARROW}${C_RESET} ${C_BOLD}./update.sh${C_RESET}     ${C_GREY}# pull the latest OpenJibo${C_RESET}\n"
   printf "\n  ${C_GREY}Health check (local): http://localhost:24605/health${C_RESET}\n\n"
 }
@@ -690,9 +690,9 @@ write_run_scripts() {
 #
 # Starts the OpenJibo .NET cloud.
 #
-#   ./run.sh              # local dev cloud (https://localhost:24604 / http://localhost:24605)
-#   ./run.sh local        # same as above
-#   ./run.sh live         # live-device mode on port 443 with TLS certs (needs sudo)
+#   ./run.sh              # live-device mode on port 443 with TLS certs (needs sudo)
+#   ./run.sh live         # same as above
+#   ./run.sh local        # local dev cloud (https://localhost:24604 / http://localhost:24605)
 #
 # By default it first does a `git pull` to update OpenJibo. Skip that with
 # `--no-update` (or NO_UPDATE=1), e.g. `./run.sh live --no-update`.
@@ -737,13 +737,13 @@ EZJiboServer run
 Usage: ./run.sh [mode] [--no-update]
 
 Modes:
-  local   (default) Local dev cloud.
+  live    (default) Live-device cloud on port 443 with TLS certs.
+            Uses <home>/certs/{cert,key}.pem by default (override with
+            CERT_PEM/KEY_PEM) and runs with sudo to bind the privileged port.
+  local   Local dev cloud.
             HTTPS:  https://localhost:24604
             HTTP:   http://localhost:24605
             Health: http://localhost:24605/health
-  live    Live-device cloud on port 443 with TLS certs.
-            Uses <home>/certs/{cert,key}.pem by default (override with
-            CERT_PEM/KEY_PEM) and runs with sudo to bind the privileged port.
 
 Options:
   --no-update  Do not git pull before starting (also: NO_UPDATE=1)
@@ -751,11 +751,11 @@ Options:
 USAGE
 }
 
-MODE="local"
+MODE="live"
 DO_UPDATE=1
 for arg in "$@"; do
   case "$arg" in
-    ""|local)    MODE="local" ;;
+    local)       MODE="local" ;;
     live)        MODE="live" ;;
     --no-update) DO_UPDATE=0 ;;
     -h|--help)   usage; exit 0 ;;
