@@ -694,6 +694,9 @@ write_run_scripts() {
 #   ./run.sh local        # same as above
 #   ./run.sh live         # live-device mode on port 443 with TLS certs (needs sudo)
 #
+# By default it first does a `git pull` to update OpenJibo. Skip that with
+# `--no-update` (or NO_UPDATE=1), e.g. `./run.sh live --no-update`.
+#
 # Live mode uses TLS certificates. By default it uses the self-signed pair that
 # setup.sh generated in <home>/certs. Override with:
 #   CERT_PEM   path to cert.pem
@@ -731,7 +734,7 @@ usage() {
   cat <<USAGE
 EZJiboServer run
 
-Usage: ./run.sh [mode]
+Usage: ./run.sh [mode] [--no-update]
 
 Modes:
   local   (default) Local dev cloud.
@@ -743,17 +746,22 @@ Modes:
             CERT_PEM/KEY_PEM) and runs with sudo to bind the privileged port.
 
 Options:
+  --no-update  Do not git pull before starting (also: NO_UPDATE=1)
   -h, --help   Show this help
 USAGE
 }
 
 MODE="local"
-case "${1:-}" in
-  ""|local)      MODE="local" ;;
-  live)          MODE="live" ;;
-  -h|--help)     usage; exit 0 ;;
-  *)             echo "unknown mode: $1 (try --help)" >&2; exit 1 ;;
-esac
+DO_UPDATE=1
+for arg in "$@"; do
+  case "$arg" in
+    ""|local)    MODE="local" ;;
+    live)        MODE="live" ;;
+    --no-update) DO_UPDATE=0 ;;
+    -h|--help)   usage; exit 0 ;;
+    *)           echo "unknown argument: $arg (try --help)" >&2; exit 1 ;;
+  esac
+done
 
 [[ -d "$OPENJIBO_DIR" ]] || {
   echo "error: OpenJibo not found at $OPENJIBO_DIR" >&2
@@ -761,7 +769,37 @@ esac
   exit 1
 }
 
+# Update on run: pull the latest OpenJibo before starting (dotnet run rebuilds).
+if [[ "$DO_UPDATE" -eq 1 && "${NO_UPDATE:-0}" != "1" ]]; then
+  REPO_DIR="$EZJIBOSERVER_HOME/JiboExperiments"
+  if [[ -d "$REPO_DIR/.git" ]] && command -v git >/dev/null 2>&1; then
+    echo "Updating OpenJibo (git pull)..."
+    git -C "$REPO_DIR" pull --ff-only \
+      || echo "warning: git pull failed; continuing with the current checkout" >&2
+  fi
+fi
+
 cd "$OPENJIBO_DIR"
+
+# ---------------------------------------------------------------------------
+# Runtime environment (matches the known-good production recipe): use fully
+# local, file-backed persistence so no external services (Azure/DB) are needed,
+# and make sure every directory the app writes to exists up front.
+# ---------------------------------------------------------------------------
+APP_DATA="$OPENJIBO_DIR/App_Data"
+CAP_WS="$OPENJIBO_DIR/captures/websocket"
+CAP_HTTP="$OPENJIBO_DIR/captures/http"
+CAP_LOGS="$OPENJIBO_DIR/captures/logs"
+CAP_TURN="$OPENJIBO_DIR/captures/turn"
+STT_TMP="/tmp/openjibo-stt"
+mkdir -p "$APP_DATA" "$CAP_WS" "$CAP_HTTP" "$CAP_LOGS" "$CAP_TURN" "$STT_TMP"
+
+export OpenJibo__State__Backend=File
+export OpenJibo__State__PersistencePath="$APP_DATA/cloud-state.json"
+export OpenJibo__PersonalMemory__Backend=File
+export OpenJibo__PersonalMemory__PersistencePath="$APP_DATA/personal-memory.json"
+export OpenJibo__Telemetry__DirectoryPath="$CAP_WS"
+export OpenJibo__ProtocolTelemetry__DirectoryPath="$CAP_HTTP"
 
 if [[ "$MODE" == "local" ]]; then
   command -v dotnet >/dev/null 2>&1 || {
@@ -771,18 +809,13 @@ if [[ "$MODE" == "local" ]]; then
   echo "Starting OpenJibo (local dev): https://localhost:24604  http://localhost:24605"
 
   # Prefer the repo's PowerShell launcher when pwsh is available (keeps parity
-  # with the upstream tooling). Otherwise run dotnet directly with the same
-  # capture directories the .ps1 sets up -- PowerShell is not required.
+  # with the upstream tooling); otherwise run dotnet directly. Either way the
+  # OpenJibo__* env above is inherited, so PowerShell is not required.
   if command -v pwsh >/dev/null 2>&1; then
     exec pwsh -NoProfile -File "scripts/cloud/Start-OpenJiboDotNet.ps1"
   fi
 
   echo "(pwsh not found -- running dotnet directly)"
-  CAP_WS="$OPENJIBO_DIR/captures/websocket"
-  CAP_HTTP="$OPENJIBO_DIR/captures/http"
-  mkdir -p "$CAP_WS" "$CAP_HTTP"
-  export OpenJibo__Telemetry__DirectoryPath="$CAP_WS"
-  export OpenJibo__ProtocolTelemetry__DirectoryPath="$CAP_HTTP"
   exec dotnet run \
     --project "src/Jibo.Cloud/dotnet/src/Jibo.Cloud.Api/Jibo.Cloud.Api.csproj" \
     --launch-profile Jibo.Cloud.Api
@@ -807,9 +840,17 @@ echo "Starting OpenJibo (live device) on port 443 using:"
 echo "  cert: $CERT_PEM"
 echo "  key:  $KEY_PEM"
 
-# Binding 443 needs privilege. Preserve our PATH/env for the child process.
+# Binding 443 needs privilege. Preserve our PATH/env for the child process
+# (sudo would otherwise scrub it, dropping the OpenJibo__* runtime settings).
 RUN=(env "PATH=$PATH" \
      "AllowMissingPrunePackageData=true" \
+     "ASPNETCORE_ENVIRONMENT=Production" "DOTNET_ENVIRONMENT=Production" \
+     "OpenJibo__State__Backend=File" \
+     "OpenJibo__State__PersistencePath=$APP_DATA/cloud-state.json" \
+     "OpenJibo__PersonalMemory__Backend=File" \
+     "OpenJibo__PersonalMemory__PersistencePath=$APP_DATA/personal-memory.json" \
+     "OpenJibo__Telemetry__DirectoryPath=$CAP_WS" \
+     "OpenJibo__ProtocolTelemetry__DirectoryPath=$CAP_HTTP" \
      "CERT_PEM=$CERT_PEM" "KEY_PEM=$KEY_PEM")
 [[ -n "${DOTNET_ROOT:-}" ]] && RUN+=("DOTNET_ROOT=$DOTNET_ROOT")
 [[ -n "${CHAIN_PEM:-}" ]] && RUN+=("CHAIN_PEM=$CHAIN_PEM")
