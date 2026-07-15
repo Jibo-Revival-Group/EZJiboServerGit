@@ -57,20 +57,77 @@ FORCE_CERTS=0
 ASSUME_YES=0
 
 # ---------------------------------------------------------------------------
-# Pretty logging
+# Presentation layer
 # ---------------------------------------------------------------------------
 
+# Colors, only when stdout is a real terminal.
 if [[ -t 1 ]]; then
-  C_RESET="\033[0m"; C_BOLD="\033[1m"; C_BLUE="\033[34m"
-  C_GREEN="\033[32m"; C_YELLOW="\033[33m"; C_RED="\033[31m"
+  C_RESET="\033[0m"; C_BOLD="\033[1m"; C_DIM="\033[2m"
+  C_BLUE="\033[38;5;39m"; C_CYAN="\033[38;5;44m"; C_GREEN="\033[38;5;42m"
+  C_YELLOW="\033[38;5;220m"; C_RED="\033[38;5;203m"; C_GREY="\033[38;5;245m"
 else
-  C_RESET=""; C_BOLD=""; C_BLUE=""; C_GREEN=""; C_YELLOW=""; C_RED=""
+  C_RESET=""; C_BOLD=""; C_DIM=""; C_BLUE=""; C_CYAN=""; C_GREEN=""
+  C_YELLOW=""; C_RED=""; C_GREY=""
 fi
 
-log()  { printf "${C_BLUE}${C_BOLD}==>${C_RESET} %s\n" "$*"; }
-ok()   { printf "${C_GREEN}  ok${C_RESET} %s\n" "$*"; }
-warn() { printf "${C_YELLOW}  !!${C_RESET} %s\n" "$*" >&2; }
-die()  { printf "${C_RED}${C_BOLD}error:${C_RESET} %s\n" "$*" >&2; exit 1; }
+# Glyphs: unicode when the locale looks like UTF-8, else ASCII fallbacks.
+if [[ "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" == *[Uu][Tt][Ff]* ]]; then
+  G_OK="✓"; G_WARN="!"; G_ERR="✗"; G_DOT="•"; G_ARROW="➜"
+  B_TL="╭"; B_TR="╮"; B_BL="╰"; B_BR="╯"; B_H="─"; B_V="│"
+  T_MID="├─"; T_END="╰─"
+else
+  G_OK="+"; G_WARN="!"; G_ERR="x"; G_DOT="*"; G_ARROW=">"
+  B_TL="+"; B_TR="+"; B_BL="+"; B_BR="+"; B_H="-"; B_V="|"
+  T_MID="|-"; T_END="\`-"
+fi
+
+STEP=0
+TOTAL_STEPS=10
+BOX_W=54          # inner width of banner/rules
+START_TS="$(date +%s)"
+
+repeat() { local n="$1" s="$2" out=""; while (( n-- > 0 )); do out+="$s"; done; printf '%s' "$out"; }
+
+rule() { printf "${C_GREY}%s${C_RESET}\n" "$(repeat $((BOX_W + 4)) "$B_H")"; }
+
+banner() {
+  local bar; bar="$(repeat $((BOX_W + 2)) "$B_H")"
+  printf "\n${C_CYAN}%s%s%s${C_RESET}\n" "$B_TL" "$bar" "$B_TR"
+  printf "${C_CYAN}${B_V}${C_RESET}  ${C_BOLD}${C_BLUE}%s${C_RESET}\n" "$BRAND"
+  printf "${C_CYAN}${B_V}${C_RESET}  ${C_GREY}%s${C_RESET}\n" "One-command OpenJibo cloud installer"
+  printf "${C_CYAN}%s%s%s${C_RESET}\n" "$B_BL" "$bar" "$B_BR"
+}
+
+step() {
+  STEP=$((STEP + 1))
+  printf "\n${C_BOLD}${C_BLUE}${G_ARROW}${C_RESET} ${C_DIM}[%d/%d]${C_RESET} ${C_BOLD}%s${C_RESET}\n" "$STEP" "$TOTAL_STEPS" "$*"
+}
+
+info() { printf "   ${C_GREY}${G_DOT}${C_RESET} ${C_GREY}%s${C_RESET}\n" "$*"; }
+ok()   { printf "   ${C_GREEN}${G_OK}${C_RESET} %s\n" "$*"; }
+warn() { printf "   ${C_YELLOW}${G_WARN}${C_RESET} ${C_YELLOW}%s${C_RESET}\n" "$*" >&2; }
+die()  { printf "\n${C_RED}${C_BOLD}${G_ERR} error:${C_RESET} ${C_RED}%s${C_RESET}\n" "$*" >&2; exit 1; }
+
+summary() {
+  local secs=$(( $(date +%s) - START_TS ))
+  printf "\n"
+  rule
+  printf "  ${C_GREEN}${C_BOLD}${G_OK} %s is ready${C_RESET}  ${C_GREY}(%dm %02ds)${C_RESET}\n" "$BRAND" "$((secs / 60))" "$((secs % 60))"
+  rule
+  printf "\n  ${C_BOLD}Installed at${C_RESET}  ${C_CYAN}%s${C_RESET}\n\n" "$EZJIBOSERVER_HOME"
+  printf "   ${C_GREY}%s${C_RESET}\n" "${EZJIBOSERVER_HOME}/"
+  printf "   ${C_GREY}${T_MID}${C_RESET} ${C_BOLD}%-18s${C_RESET}${C_GREY}%s${C_RESET}\n" "run.sh" "start the OpenJibo server"
+  printf "   ${C_GREY}${T_MID}${C_RESET} ${C_BOLD}%-18s${C_RESET}${C_GREY}%s${C_RESET}\n" "update.sh" "git pull the latest OpenJibo"
+  printf "   ${C_GREY}${T_MID}${C_RESET} ${C_BOLD}%-18s${C_RESET}${C_GREY}%s${C_RESET}\n" "certs/" "self-signed TLS for live mode"
+  printf "   ${C_GREY}${T_MID}${C_RESET} ${C_BOLD}%-18s${C_RESET}${C_GREY}%s${C_RESET}\n" "whisper.cpp/" "local speech-to-text"
+  printf "   ${C_GREY}${T_END}${C_RESET} ${C_BOLD}%-18s${C_RESET}${C_GREY}%s${C_RESET}\n" "JiboExperiments/" "cloned OpenJibo source"
+  printf "\n  ${C_BOLD}Next steps${C_RESET}\n"
+  printf "    ${C_BLUE}${G_ARROW}${C_RESET} cd %s\n" "$EZJIBOSERVER_HOME"
+  printf "    ${C_BLUE}${G_ARROW}${C_RESET} ${C_BOLD}./run.sh${C_RESET}        ${C_GREY}# https://localhost:24604  http://localhost:24605${C_RESET}\n"
+  printf "    ${C_BLUE}${G_ARROW}${C_RESET} ${C_BOLD}./run.sh live${C_RESET}   ${C_GREY}# port 443 + TLS (real Jibo, uses sudo)${C_RESET}\n"
+  printf "    ${C_BLUE}${G_ARROW}${C_RESET} ${C_BOLD}./update.sh${C_RESET}     ${C_GREY}# pull the latest OpenJibo${C_RESET}\n"
+  printf "\n  ${C_GREY}Health check (local): http://localhost:24605/health${C_RESET}\n\n"
+}
 
 # ---------------------------------------------------------------------------
 # Argument parsing
@@ -218,7 +275,7 @@ pm_install() {
 # ---------------------------------------------------------------------------
 
 install_base_tools() {
-  log "Installing base tools (git, openssl, ffmpeg, curl, build toolchain, cmake)"
+  step "Installing base tools (git, openssl, ffmpeg, curl, build toolchain, cmake)"
 
   if [[ "$SKIP_DEPS" -eq 1 ]]; then
     warn "--skip-deps set; only verifying base tools are present"
@@ -253,7 +310,7 @@ install_base_tools() {
 }
 
 install_dotnet() {
-  log "Ensuring .NET $DOTNET_CHANNEL SDK is available"
+  step "Ensuring .NET $DOTNET_CHANNEL SDK is available"
 
   if resolve_dotnet; then
     ok "found dotnet $("$DOTNET_BIN" --version) ($DOTNET_BIN)"
@@ -280,7 +337,7 @@ install_dotnet() {
     return 0
   fi
 
-  log "Installing .NET $DOTNET_CHANNEL via official dotnet-install script into $LOCAL_DOTNET"
+  info "Installing .NET $DOTNET_CHANNEL via official dotnet-install script into $LOCAL_DOTNET"
   local script="$EZJIBOSERVER_HOME/.cache/dotnet-install.sh"
   mkdir -p "$(dirname "$script")"
   if have curl; then
@@ -299,7 +356,7 @@ install_dotnet() {
 }
 
 install_powershell() {
-  log "Ensuring PowerShell (pwsh) is available"
+  step "Ensuring PowerShell (pwsh) is available"
 
   if have pwsh; then
     ok "found pwsh $(pwsh --version 2>/dev/null || echo '?')"
@@ -360,7 +417,7 @@ install_powershell_ms_dnf() {
 }
 
 install_powershell_tarball() {
-  log "Installing PowerShell from the official GitHub release tarball into ~/.powershell"
+  info "Installing PowerShell from the official GitHub release tarball into ~/.powershell"
   have curl || die "need curl to download PowerShell tarball"
 
   local arch tag asset
@@ -394,12 +451,14 @@ install_powershell_tarball() {
 }
 
 build_whisper() {
+  step "Building whisper.cpp (local speech-to-text)"
+
   if [[ "$SKIP_WHISPER" -eq 1 ]]; then
     warn "--skip-whisper set; skipping whisper.cpp build and model download"
     return 0
   fi
 
-  log "Building whisper.cpp into $WHISPER_DIR"
+  info "Target: $WHISPER_DIR"
 
   local cli="$WHISPER_DIR/build/bin/whisper-cli"
   local model="$WHISPER_DIR/models/ggml-${WHISPER_MODEL}.bin"
@@ -423,7 +482,7 @@ build_whisper() {
   if [[ -f "$model" ]]; then
     ok "whisper model present ($model)"
   else
-    log "Downloading whisper model: $WHISPER_MODEL"
+    info "Downloading whisper model: $WHISPER_MODEL"
     ( cd "$WHISPER_DIR" && bash ./models/download-ggml-model.sh "$WHISPER_MODEL" )
     [[ -f "$model" ]] || die "model download finished but $model is missing"
     ok "downloaded $model"
@@ -435,7 +494,8 @@ build_whisper() {
 # ---------------------------------------------------------------------------
 
 clone_repo() {
-  log "Fetching JiboExperiments into $REPO_DIR"
+  step "Fetching JiboExperiments"
+  info "Into $REPO_DIR"
   if [[ -d "$REPO_DIR/.git" ]]; then
     git -C "$REPO_DIR" pull --ff-only && ok "updated existing checkout" \
       || warn "could not fast-forward existing checkout; leaving as-is"
@@ -448,15 +508,17 @@ clone_repo() {
 }
 
 setup_env() {
+  step "Configuring environment (.env)"
+
   local env_file="$OPENJIBO_DIR/.env"
   local example="$OPENJIBO_DIR/.env.example"
 
   if [[ -f "$env_file" ]]; then
-    warn "existing $env_file found; leaving it untouched (it may hold encryption keys)"
+    warn "existing .env found; leaving it untouched (it may hold encryption keys)"
     return 0
   fi
 
-  log "Creating $env_file"
+  info "Creating $env_file"
   [[ -f "$example" ]] || die "missing $example to base the .env on"
 
   local encrypt salt ffmpeg_path whisper_cli whisper_model
@@ -488,6 +550,8 @@ setup_env() {
 }
 
 generate_certs() {
+  step "Generating TLS certificates (live/device mode)"
+
   if [[ "$SKIP_CERTS" -eq 1 ]]; then
     warn "--skip-certs set; skipping TLS certificate generation"
     return 0
@@ -501,7 +565,7 @@ generate_certs() {
     return 0
   fi
 
-  log "Generating self-signed TLS certificates in $CERT_DIR"
+  info "Writing self-signed pair into $CERT_DIR"
   mkdir -p "$CERT_DIR"
 
   # Build a SAN list from CERT_HOSTS (+ loopback IP). Universally supported via
@@ -536,6 +600,8 @@ generate_certs() {
 }
 
 warmup_build() {
+  step "Warming up the .NET build (restore + build)"
+
   if [[ "$SKIP_BUILD" -eq 1 ]]; then
     warn "--skip-build set; skipping dotnet restore/build warm-up"
     return 0
@@ -546,7 +612,7 @@ warmup_build() {
   local proj="$OPENJIBO_DIR/src/Jibo.Cloud/dotnet/src/Jibo.Cloud.Api/Jibo.Cloud.Api.csproj"
   [[ -f "$proj" ]] || die "API project not found at $proj"
 
-  log "Warming up the .NET build (restore + build)"
+  info "This can take a minute on first run..."
   ( cd "$OPENJIBO_DIR" && "$DOTNET_BIN" restore "$proj" && "$DOTNET_BIN" build "$proj" -c Debug --nologo )
   ok "build warm-up complete"
 }
@@ -559,7 +625,8 @@ warmup_build() {
 # ---------------------------------------------------------------------------
 
 write_run_scripts() {
-  log "Writing run.sh and update.sh into $EZJIBOSERVER_HOME"
+  step "Writing launcher scripts (run.sh, update.sh)"
+  info "Into $EZJIBOSERVER_HOME"
 
   cat > "$EZJIBOSERVER_HOME/run.sh" <<'RUNSH_EOF'
 #!/usr/bin/env bash
@@ -742,12 +809,13 @@ UPDATESH_EOF
 # ---------------------------------------------------------------------------
 
 main() {
-  printf "${C_BOLD}%s setup${C_RESET}\n" "$BRAND"
-  log "Install location: $EZJIBOSERVER_HOME"
+  banner
 
+  step "Checking system"
+  info "Install location: $EZJIBOSERVER_HOME"
   detect_platform
   if [[ -n "$PKG" ]]; then
-    ok "package manager: $PKG"
+    ok "detected $OS with package manager: $PKG"
   else
     warn "no supported package manager detected; will only verify dependencies"
     SKIP_DEPS=1
@@ -764,17 +832,7 @@ main() {
   warmup_build
   write_run_scripts
 
-  printf "\n${C_GREEN}${C_BOLD}Done.${C_RESET}\n"
-  cat <<EOF
-
-Next steps:
-  cd "$EZJIBOSERVER_HOME"
-  ./run.sh            # local dev cloud -> https://localhost:24604  http://localhost:24605
-  ./run.sh live       # live device on port 443 (uses certs/, runs with sudo)
-  ./update.sh         # pull the latest JiboExperiments
-
-Health check (local mode): http://localhost:24605/health
-EOF
+  summary
 }
 
 main "$@"

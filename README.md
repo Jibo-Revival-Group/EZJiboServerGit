@@ -14,19 +14,20 @@ live/device mode, warms up the build, and leaves behind two scripts:
 `setup.sh` itself is not left in the install directory - only `run.sh` and
 `update.sh` are.
 
-## Quickstart
-
+## Install
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Jibo-Revival-Group/EZJiboServerGit/main/setup.sh | bash
+```
+
+If you have the file locally instead, just run `./setup.sh`.
+
+## Run
+```bash
 cd ~/EZJiboServer
 ./run.sh
 ```
 
-> Replace the URL above with wherever you host `setup.sh`.
-
 Then open the health check at <http://localhost:24605/health>.
-
-If you have the file locally instead, just run `./setup.sh`.
 
 ## What setup.sh installs
 
